@@ -3,10 +3,11 @@ import json
 import base64
 import urllib.parse
 import os
-import requests  # 新增：用于请求网络链接
+import requests
+import uuid
 
 
-# ================= 核心处理逻辑 (保持不变) =================
+# ================= 核心处理逻辑 =================
 
 def safe_base64_decode(s):
     """
@@ -118,9 +119,14 @@ def parse_tuic(parsed_url):
     return proxy
 
 
-def generate_yaml(proxies, rules_content):
+def generate_yaml(proxies, rules_content, source_url=""):
     proxy_names = [p['name'] for p in proxies]
-    yaml_content = """mixed-port: 7890
+
+    header_info = ""
+    if source_url:
+        header_info = f"# Source Subscription: {source_url}\n"
+
+    yaml_content = f"""{header_info}mixed-port: 7890
 allow-lan: true
 mode: Rule
 log-level: info
@@ -186,16 +192,19 @@ st.set_page_config(page_title="V2Ray 转 Clash", page_icon="🔄")
 st.title("🔄 V2Ray 链接转 Clash Meta 配置")
 st.markdown("上传你的节点列表文件，或者直接输入订阅链接。")
 
-# 布局：文件上传区域
+# 布局
 col1, col2 = st.columns(2)
 with col1:
     nodes_file = st.file_uploader("1. 上传节点文件 (txt)", type=['txt'], help="每行一个 vmess/vless 链接")
 with col2:
     rules_file = st.file_uploader("2. 上传规则文件 (可选)", type=['txt'], help="留空则读取服务器本地 rules.txt")
 
-# 新增：订阅链接输入框
+# 订阅链接输入框
 subscription_url = st.text_input("🔗 或者输入订阅链接 (URL)", placeholder="https://example.com/subscribe?token=...",
                                  help="输入机场或面板的订阅链接，自动抓取并 Base64 解码")
+
+# --- 修改：硬编码服务器地址 ---
+server_host = "http://ip.padaro.top:8501"
 
 # 备用极简规则
 fallback_rules = """  - GEOIP,CN,🎯 全球直连
@@ -204,50 +213,42 @@ fallback_rules = """  - GEOIP,CN,🎯 全球直连
 
 if st.button("开始转换", type="primary"):
     nodes_content = ""
+    current_source = ""
 
-    # === 1. 获取节点内容 (优先处理订阅链接) ===
+    # === 1. 获取节点内容 ===
     if subscription_url:
+        current_source = subscription_url.strip()
         try:
             with st.spinner("🚀 正在请求订阅数据..."):
-                # 模拟浏览器 User-Agent，防止部分机场拦截 Python 请求
                 headers = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-                resp = requests.get(subscription_url.strip(), headers=headers, timeout=15)
+                resp = requests.get(current_source, headers=headers, timeout=15)
                 resp.raise_for_status()
                 raw_content = resp.text.strip()
-
-                # Base64 解码逻辑
                 try:
-                    # 自动补全 Base64 缺失的 Padding
                     missing_padding = len(raw_content) % 4
-                    if missing_padding:
-                        raw_content += '=' * (4 - missing_padding)
-
-                    # 尝试标准解码
+                    if missing_padding: raw_content += '=' * (4 - missing_padding)
                     nodes_content = base64.b64decode(raw_content).decode('utf-8')
-                except Exception as e:
-                    # 如果标准解码失败，尝试 URL-safe 解码，或直接假设是明文
+                except Exception:
                     try:
                         nodes_content = base64.urlsafe_b64decode(raw_content).decode('utf-8')
                     except Exception:
-                        # 既不是标准Base64也不是URLSafeBase64，可能直接是明文列表
                         nodes_content = raw_content
                         st.warning("⚠️ 内容似乎不是 Base64 编码，尝试直接解析...")
-
                 st.success("✅ 订阅获取并解析成功！")
         except Exception as e:
             st.error(f"❌ 获取订阅失败: {e}")
             st.stop()
 
-    # === 2. 如果没输链接，检查上传的文件 ===
     elif nodes_file:
         nodes_content = nodes_file.getvalue().decode("utf-8")
+        current_source = "Uploaded File: " + nodes_file.name
 
     else:
         st.error("请上传节点文件或输入订阅链接！")
         st.stop()
 
-    # === 3. 规则文件加载逻辑 ===
+    # === 2. 规则文件加载逻辑 ===
     if rules_file:
         rules_content = rules_file.getvalue().decode("utf-8")
         st.success("已使用您上传的规则文件。")
@@ -263,7 +264,7 @@ if st.button("开始转换", type="primary"):
         st.warning("⚠️ 未上传规则文件，且服务器本地未找到 rules.txt，将使用内置极简规则。")
         rules_content = fallback_rules
 
-    # === 4. 处理节点解析 ===
+    # === 3. 处理节点解析 ===
     proxies = []
     name_counter = {}
 
@@ -282,14 +283,12 @@ if st.button("开始转换", type="primary"):
                 p = parse_tuic(urllib.parse.urlparse(line))
 
             if p:
-                # 重名检测
                 original_name = p['name']
                 if original_name in name_counter:
                     name_counter[original_name] += 1
                     p['name'] = f"{original_name}_{name_counter[original_name]}"
                 else:
                     name_counter[original_name] = 0
-
                 proxies.append(p)
         except Exception:
             continue
@@ -297,12 +296,37 @@ if st.button("开始转换", type="primary"):
     if not proxies:
         st.error("❌ 未能识别到有效的节点链接，请检查订阅内容或文件。")
     else:
-        final_yaml = generate_yaml(proxies, rules_content)
+        final_yaml = generate_yaml(proxies, rules_content, current_source)
 
         st.success(f"🎉 转换成功！共包含 {len(proxies)} 个节点。")
 
+        # === 4. 保存为静态文件并生成链接 ===
+
+        # 确保 static 文件夹存在
+        static_dir = "static"
+        if not os.path.exists(static_dir):
+            os.makedirs(static_dir)
+
+        # 生成随机文件名，避免多人使用冲突
+        random_filename = f"config_{uuid.uuid4().hex[:8]}.yaml"
+        file_path = os.path.join(static_dir, random_filename)
+
+        # 写入文件
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(final_yaml)
+
+        # 构造 URL (使用硬编码的地址)
+        if server_host.endswith("/"):
+            server_host = server_host[:-1]
+
+        download_url = f"{server_host}/app/static/{random_filename}"
+
+        st.markdown("### 📋 订阅链接 (点击右上角复制)")
+        st.code(download_url, language="text")
+        st.info("💡 提示：将上方链接直接粘贴到 Clash 的【URL】或【订阅地址】栏中即可更新。")
+
         st.download_button(
-            label="下载 config.yaml",
+            label="📥 下载本地文件 (备份)",
             data=final_yaml,
             file_name="config.yaml",
             mime="text/yaml"
