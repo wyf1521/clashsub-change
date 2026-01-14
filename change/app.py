@@ -5,12 +5,14 @@ import urllib.parse
 import os
 import requests
 import uuid
+import streamlit.components.v1 as components
 
 
-# ================= 核心处理逻辑 =================
+# ================= 辅助函数 =================
 
 def safe_base64_decode(s):
-    s = s.strip()
+    """安全的 Base64 解码，处理填充和替换"""
+    s = s.strip().replace('-', '+').replace('_', '/')
     missing_padding = len(s) % 4
     if missing_padding:
         s += '=' * (4 - missing_padding)
@@ -20,12 +22,30 @@ def safe_base64_decode(s):
         return base64.b64decode(s).decode('utf-8')
 
 
+def safe_name_decode(name):
+    """安全的名称解码，解决中文乱码"""
+    if not name:
+        return "Unknown_Node"
+    try:
+        # 尝试 URL 解码两次，防止双重编码
+        decoded = urllib.parse.unquote(name)
+        decoded = urllib.parse.unquote(decoded)
+        return decoded
+    except:
+        return name
+
+
+# ================= 核心解析逻辑 =================
+
 def parse_vmess(url_body):
     try:
         json_str = safe_base64_decode(url_body)
         data = json.loads(json_str)
-        # 确保名称正确解码
-        name = data.get("ps", "vmess")
+
+        # --- 修复 1: 强制对 vmess 的 ps 字段进行 URL 解码 ---
+        raw_name = data.get("ps", "vmess")
+        name = safe_name_decode(raw_name)
+
         proxy = {
             "name": name,
             "type": "vmess",
@@ -35,7 +55,7 @@ def parse_vmess(url_body):
             "alterId": int(data.get("aid", 0)),
             "cipher": data.get("scy", "auto"),
             "network": data.get("net", "ws"),
-            "tls": True if data.get("tls") else False,
+            "tls": True if data.get("tls") == "tls" or data.get("tls") is True else False,
             "udp": True,
             "skip-cert-verify": True if data.get("verify_cert") == False else False
         }
@@ -53,9 +73,9 @@ def parse_vless(parsed_url):
     params = urllib.parse.parse_qs(parsed_url.query)
     network = params.get("type", ["tcp"])[0]
 
-    # --- 修复乱码点：强制处理 fragment 的编码 ---
+    # --- 修复: 确保 fragment 解码 ---
     raw_name = parsed_url.fragment
-    name = urllib.parse.unquote(raw_name) if raw_name else "vless_node"
+    name = safe_name_decode(raw_name) if raw_name else "vless_node"
 
     proxy = {
         "name": name,
@@ -93,7 +113,7 @@ def parse_vless(parsed_url):
 
 def parse_hysteria2(parsed_url):
     params = urllib.parse.parse_qs(parsed_url.query)
-    name = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else "hysteria2_node"
+    name = safe_name_decode(parsed_url.fragment) if parsed_url.fragment else "hysteria2_node"
     return {
         "name": name,
         "type": "hysteria2",
@@ -109,7 +129,7 @@ def parse_hysteria2(parsed_url):
 def parse_tuic(parsed_url):
     params = urllib.parse.parse_qs(parsed_url.query)
     user_info = parsed_url.username.split(':') if parsed_url.username else ["", ""]
-    name = urllib.parse.unquote(parsed_url.fragment) if parsed_url.fragment else "tuic_node"
+    name = safe_name_decode(parsed_url.fragment) if parsed_url.fragment else "tuic_node"
     proxy = {
         "name": name,
         "type": "tuic",
@@ -129,7 +149,13 @@ def parse_tuic(parsed_url):
 
 
 def generate_yaml(proxies, rules_content, source_url=""):
-    proxy_names = [p['name'] for p in proxies]
+    proxy_names = []
+    # 过滤名字中的特殊字符，防止YAML破坏
+    for p in proxies:
+        safe_n = p['name'].replace('"', '').replace("'", "")
+        p['name'] = safe_n
+        proxy_names.append(safe_n)
+
     header_info = f"# Source Subscription: {source_url}\n" if source_url else ""
     yaml_content = f"""{header_info}mixed-port: 7890
 allow-lan: true
@@ -139,7 +165,7 @@ external-controller: :9090
 proxies:
 """
     for p in proxies:
-        yaml_content += f"  - name: \"{p['name']}\"\n"  # 增加双引号防止YAML解析错误
+        yaml_content += f"  - name: \"{p['name']}\"\n"
         yaml_content += f"    type: {p['type']}\n"
         yaml_content += f"    server: {p['server']}\n"
         yaml_content += f"    port: {p['port']}\n"
@@ -149,14 +175,17 @@ proxies:
                 val = str(p[key]).lower() if isinstance(p[key], bool) else p[key]
                 yaml_content += f"    {key}: {val}\n"
         if "ws-opts" in p:
-            yaml_content += f"    ws-opts:\n      path: {p['ws-opts']['path']}\n      headers:\n        Host: {p['ws-opts']['headers']['Host']}\n"
+            yaml_content += f"    ws-opts:\n      path: \"{p['ws-opts']['path']}\"\n      headers:\n        Host: {p['ws-opts']['headers']['Host']}\n"
         if "reality-opts" in p:
             yaml_content += f"    reality-opts:\n      public-key: {p['reality-opts']['public-key']}\n"
             if "short-id" in p['reality-opts']: yaml_content += f"      short-id: {p['reality-opts']['short-id']}\n"
         if "alpn" in p:
             yaml_content += f"    alpn:\n"
             for a in p['alpn']: yaml_content += f"      - {a}\n"
+
     yaml_content += "proxy-groups:\n"
+
+    # 定义策略组
     groups = [
         {"name": "🚀 节点选择", "type": "select", "special": ["♻️ 自动选择", "DIRECT"]},
         {"name": "♻️ 自动选择", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 300,
@@ -171,6 +200,7 @@ proxies:
         {"name": "🍃 应用净化", "type": "select", "base": ["REJECT", "DIRECT"], "no_proxies": True},
         {"name": "🐟 漏网之鱼", "type": "select", "special": ["🚀 节点选择", "🎯 全球直连", "♻️ 自动选择"]},
     ]
+
     for g in groups:
         yaml_content += f"  - name: \"{g['name']}\"\n    type: {g['type']}\n"
         if "url" in g: yaml_content += f"    url: {g['url']}\n    interval: {g['interval']}\n    tolerance: {g['tolerance']}\n"
@@ -181,28 +211,33 @@ proxies:
             for s in g["special"]: yaml_content += f"      - \"{s}\"\n"
         if not g.get("no_proxies", False):
             for name in proxy_names: yaml_content += f"      - \"{name}\"\n"
+
     yaml_content += "rules:\n" + rules_content
     return yaml_content
 
 
 # ================= 网页界面逻辑 =================
 
-st.set_page_config(page_title="V2Ray 转 Clash", page_icon="🔄")
+st.set_page_config(page_title="V2Ray 转 Clash", page_icon="🔄", layout="centered")
 st.title("🔄 V2Ray 链接转 Clash Meta 配置")
+st.markdown("---")
+
 col1, col2 = st.columns(2)
 with col1:
     nodes_file = st.file_uploader("1. 上传节点文件 (txt)", type=['txt'])
 with col2:
     rules_file = st.file_uploader("2. 上传规则文件 (可选)", type=['txt'])
 
-subscription_url = st.text_input("🔗 或者输入订阅链接 (URL)", placeholder="https://...")
+subscription_url = st.text_input("🔗 或者输入订阅链接 (URL)", placeholder="https://example.com/sub/...")
 
-# 固定服务器地址
+# 注意：请确保服务器已配置静态文件服务，或者使用Nginx反向代理了 /static 目录
 server_host = "http://ip.padaro.top:8501"
 
-if st.button("开始转换", type="primary"):
+if st.button("开始转换", type="primary", use_container_width=True):
     nodes_content = ""
     current_source = ""
+
+    # --- 处理订阅链接 ---
     if subscription_url:
         current_source = subscription_url.strip()
         try:
@@ -213,25 +248,25 @@ if st.button("开始转换", type="primary"):
                 resp.raise_for_status()
                 raw_content = resp.text.strip()
                 try:
-                    missing_padding = len(raw_content) % 4
-                    if missing_padding: raw_content += '=' * (4 - missing_padding)
-                    nodes_content = base64.b64decode(raw_content).decode('utf-8')
+                    # 尝试Base64解码
+                    nodes_content = safe_base64_decode(raw_content)
                 except:
-                    try:
-                        nodes_content = base64.urlsafe_b64decode(raw_content).decode('utf-8')
-                    except:
-                        nodes_content = raw_content
-                st.success("✅ 订阅获取并解析成功！")
+                    # 如果不是Base64，直接使用原文
+                    nodes_content = raw_content
+                st.success("✅ 订阅获取成功！")
         except Exception as e:
             st.error(f"❌ 获取订阅失败: {e}")
             st.stop()
+
+    # --- 处理文件上传 ---
     elif nodes_file:
         nodes_content = nodes_file.getvalue().decode("utf-8")
         current_source = nodes_file.name
     else:
-        st.error("请上传节点文件或输入订阅链接！")
+        st.warning("⚠️ 请先上传节点文件或输入订阅链接！")
         st.stop()
 
+    # --- 读取规则文件 ---
     rules_content = ""
     if rules_file:
         rules_content = rules_file.getvalue().decode("utf-8")
@@ -239,9 +274,17 @@ if st.button("开始转换", type="primary"):
         with open('rules.txt', 'r', encoding='utf-8') as f:
             rules_content = f.read()
 
+    # --- 解析节点 ---
     proxies = []
     name_counter = {}
-    for line in nodes_content.splitlines():
+
+    # 预处理：有些订阅是用 | 分割的，有些是换行
+    if "|" in nodes_content and "\n" not in nodes_content:
+        lines = nodes_content.split("|")
+    else:
+        lines = nodes_content.splitlines()
+
+    for line in lines:
         line = line.strip()
         if not line: continue
         p = None
@@ -254,7 +297,9 @@ if st.button("开始转换", type="primary"):
                 p = parse_hysteria2(urllib.parse.urlparse(line))
             elif line.startswith("tuic://"):
                 p = parse_tuic(urllib.parse.urlparse(line))
+
             if p:
+                # 节点重名处理
                 o_name = p['name']
                 if o_name in name_counter:
                     name_counter[o_name] += 1
@@ -262,25 +307,80 @@ if st.button("开始转换", type="primary"):
                 else:
                     name_counter[o_name] = 0
                 proxies.append(p)
-        except:
+        except Exception as e:
+            # print(f"Parse error: {e}") # 调试用
             continue
 
     if not proxies:
-        st.error("❌ 未识别到有效节点")
+        st.error("❌ 未识别到有效节点，请检查链接格式或Base64编码")
     else:
         final_yaml = generate_yaml(proxies, rules_content, current_source)
 
         # 静态文件处理
         static_dir = "static"
         if not os.path.exists(static_dir): os.makedirs(static_dir)
+
+        # 清理旧文件 (可选)
+
         random_filename = f"config_{uuid.uuid4().hex[:8]}.yaml"
         file_path = os.path.join(static_dir, random_filename)
-        with open(file_path, "w", encoding="utf-8") as f:
+
+        # --- 修复 2: 使用 utf-8-sig 编码写入文件，解决Windows下乱码 ---
+        with open(file_path, "w", encoding="utf-8-sig") as f:
             f.write(final_yaml)
 
-        # --- 修复路径逻辑：不加 /app ---
         download_url = f"{server_host}/static/{random_filename}"
 
-        st.markdown("### 📋 订阅链接 (点击复制)")
-        st.code(download_url, language="text")
-        st.download_button("📥 下载本地文件", data=final_yaml, file_name="config.yaml")
+        st.success(f"🎉 转换成功！共包含 {len(proxies)} 个节点")
+
+        # --- 界面优化 ---
+        st.markdown("### 📋 订阅管理")
+
+        # 1. 使用输入框显示链接，方便手动全选复制
+        st.text_input("👇 订阅链接 (可手动复制)", value=download_url)
+
+        # 2. 增加 JS 点击复制按钮
+        # 这是一个黑科技，在Streamlit中嵌入JS来实现点击复制
+        components.html(
+            f"""
+            <div style="text-align: center; margin-top: 10px;">
+                <input type="text" value="{download_url}" id="myInput" style="display:none;">
+                <button onclick="copyFunction()" style="
+                    background-color: #FF4B4B; 
+                    border: none; 
+                    color: white; 
+                    padding: 10px 24px; 
+                    text-align: center; 
+                    text-decoration: none; 
+                    display: inline-block; 
+                    font-size: 16px; 
+                    margin: 4px 2px; 
+                    cursor: pointer;
+                    border-radius: 8px;">
+                    📋 点击复制链接到剪贴板
+                </button>
+                <p id="msg" style="color: green; margin-top: 5px; font-family: sans-serif;"></p>
+            </div>
+
+            <script>
+            function copyFunction() {{
+              var copyText = document.getElementById("myInput");
+              navigator.clipboard.writeText(copyText.value).then(function() {{
+                  document.getElementById("msg").innerHTML = "✅ 已复制成功!";
+                  setTimeout(function(){{ document.getElementById("msg").innerHTML = ""; }}, 3000);
+              }}, function(err) {{
+                  document.getElementById("msg").innerHTML = "❌ 复制失败，请手动复制上方输入框";
+                  console.error('Async: Could not copy text: ', err);
+              }});
+            }}
+            </script>
+            """,
+            height=120
+        )
+
+        st.download_button(
+            label="📥 下载 YAML 配置文件",
+            data=final_yaml,
+            file_name="clash_config.yaml",
+            mime="text/yaml"
+        )
