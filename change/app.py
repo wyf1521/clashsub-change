@@ -9,17 +9,18 @@ import uuid
 
 def safe_base64_decode(s):
     """安全的 Base64 解码，处理填充和替换"""
-    if not s: return ""
+    if not s:
+        return ""
     s = s.strip().replace('-', '+').replace('_', '/')
     missing_padding = len(s) % 4
     if missing_padding:
         s += '=' * (4 - missing_padding)
     try:
         return base64.urlsafe_b64decode(s).decode('utf-8')
-    except:
+    except Exception:
         try:
             return base64.b64decode(s).decode('utf-8')
-        except:
+        except Exception:
             return s  # 如果解码失败返回原字符串，防止报错
 
 
@@ -30,7 +31,7 @@ def safe_name_decode(name):
         decoded = urllib.parse.unquote(name)
         decoded = urllib.parse.unquote(decoded)
         return decoded
-    except:
+    except Exception:
         return name
 
 
@@ -53,7 +54,7 @@ def parse_vmess(url_body):
             "network": data.get("net", "ws"),
             "tls": True if data.get("tls") == "tls" or data.get("tls") is True else False,
             "udp": True,
-            "skip-cert-verify": True if data.get("verify_cert") == False else False
+            "skip-cert-verify": True if data.get("verify_cert") is False else False
         }
         if proxy["network"] == "ws":
             proxy["ws-opts"] = {
@@ -86,14 +87,16 @@ def parse_vless(parsed_url):
     }
     if network == "ws":
         host = params.get("host", [""])[0]
-        if not host: host = proxy["servername"] or proxy["server"]
+        if not host:
+            host = proxy["servername"] or proxy["server"]
         proxy["ws-opts"] = {
             "path": params.get("path", ["/"])[0],
             "headers": {"Host": host}
         }
     if network == "tcp":
         flow = params.get("flow", [""])[0]
-        if flow: proxy["flow"] = flow
+        if flow:
+            proxy["flow"] = flow
     if "fp" in params:
         proxy["client-fingerprint"] = params["fp"][0]
     else:
@@ -101,8 +104,10 @@ def parse_vless(parsed_url):
     if params.get("security", [""])[0] == "reality":
         proxy["reality-opts"] = {"public-key": params.get("pbk", [""])[0]}
         sid = params.get("sid", params.get("shortId", params.get("short-id", [])))
-        if sid: proxy["reality-opts"]["short-id"] = sid[0]
-        if not proxy["servername"]: proxy["servername"] = params.get("sni", [""])[0]
+        if sid:
+            proxy["reality-opts"]["short-id"] = sid[0]
+        if not proxy["servername"]:
+            proxy["servername"] = params.get("sni", [""])[0]
     return proxy
 
 
@@ -139,7 +144,8 @@ def parse_tuic(parsed_url):
         "disable-sni": True,
         "udp": True
     }
-    if "alpn" in params: proxy["alpn"] = [params["alpn"][0]]
+    if "alpn" in params:
+        proxy["alpn"] = [params["alpn"][0]]
     return proxy
 
 
@@ -169,13 +175,20 @@ proxies:
                 val = str(p[key]).lower() if isinstance(p[key], bool) else p[key]
                 yaml_content += f"    {key}: {val}\n"
         if "ws-opts" in p:
-            yaml_content += f"    ws-opts:\n      path: \"{p['ws-opts']['path']}\"\n      headers:\n        Host: {p['ws-opts']['headers']['Host']}\n"
+            yaml_content += (
+                f"    ws-opts:\n"
+                f"      path: \"{p['ws-opts']['path']}\"\n"
+                f"      headers:\n"
+                f"        Host: {p['ws-opts']['headers']['Host']}\n"
+            )
         if "reality-opts" in p:
             yaml_content += f"    reality-opts:\n      public-key: {p['reality-opts']['public-key']}\n"
-            if "short-id" in p['reality-opts']: yaml_content += f"      short-id: {p['reality-opts']['short-id']}\n"
+            if "short-id" in p['reality-opts']:
+                yaml_content += f"      short-id: {p['reality-opts']['short-id']}\n"
         if "alpn" in p:
             yaml_content += f"    alpn:\n"
-            for a in p['alpn']: yaml_content += f"      - {a}\n"
+            for a in p['alpn']:
+                yaml_content += f"      - {a}\n"
 
     yaml_content += "proxy-groups:\n"
 
@@ -196,14 +209,18 @@ proxies:
 
     for g in groups:
         yaml_content += f"  - name: \"{g['name']}\"\n    type: {g['type']}\n"
-        if "url" in g: yaml_content += f"    url: {g['url']}\n    interval: {g['interval']}\n    tolerance: {g['tolerance']}\n"
+        if "url" in g:
+            yaml_content += f"    url: {g['url']}\n    interval: {g['interval']}\n    tolerance: {g['tolerance']}\n"
         yaml_content += f"    proxies:\n"
         if "base" in g:
-            for b in g["base"]: yaml_content += f"      - \"{b}\"\n"
+            for b in g["base"]:
+                yaml_content += f"      - \"{b}\"\n"
         if "special" in g:
-            for s in g["special"]: yaml_content += f"      - \"{s}\"\n"
+            for s in g["special"]:
+                yaml_content += f"      - \"{s}\"\n"
         if not g.get("no_proxies", False):
-            for name in proxy_names: yaml_content += f"      - \"{name}\"\n"
+            for name in proxy_names:
+                yaml_content += f"      - \"{name}\"\n"
 
     yaml_content += "rules:\n" + rules_content
     return yaml_content
@@ -212,7 +229,8 @@ proxies:
 # ================= 网页界面逻辑 =================
 
 st.set_page_config(page_title="V2Ray 转 Clash", page_icon="🔄", layout="centered")
-# ===== GitHub 项目入口（右上角）=====
+
+# ===== GitHub 项目入口（侧边栏，最稳）=====
 st.sidebar.markdown("## 项目地址")
 st.sidebar.markdown(
     """
@@ -226,75 +244,91 @@ st.sidebar.markdown(
 )
 st.sidebar.link_button("打开 GitHub", "https://github.com/wyf1521/clashsub-change")
 
-
 st.title("🔄 V2Ray 链接转 Clash Meta 配置")
 st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    nodes_file = st.file_uploader("1. 上传节点文件 (txt)", type=['txt'])
+    nodes_files = st.file_uploader("1. 上传节点文件 (txt，可多选)", type=['txt'], accept_multiple_files=True)
 with col2:
     rules_file = st.file_uploader("2. 上传规则文件 (可选)", type=['txt'])
 
-subscription_url = st.text_input("🔗 或者输入订阅链接 (URL)", placeholder="https://example.com/sub/...")
+subscription_urls_text = st.text_area(
+    "🔗 或者输入订阅链接（可多行，每行一个）",
+    placeholder="https://example.com/sub/...\nhttps://example2.com/sub/..."
+)
+subscription_urls = [u.strip() for u in subscription_urls_text.splitlines() if u.strip()]
 
 # 注意：请确保服务器已配置静态文件服务
 server_host = "http://ip.padaro.top:8501"
 
 if st.button("开始转换", type="primary", use_container_width=True):
-    nodes_content = ""
-    current_source = ""
+    sources = []
+    contents = []
 
-    # --- 1. 处理订阅链接 ---
-    if subscription_url:
-        current_source = subscription_url.strip()
+    # --- 1. 处理多个订阅链接 ---
+    for url in subscription_urls:
         try:
-            with st.spinner("🚀 正在请求订阅数据..."):
+            with st.spinner(f"🚀 正在请求订阅：{url}"):
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-                resp = requests.get(current_source, headers=headers, timeout=15)
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+                resp = requests.get(url, headers=headers, timeout=15)
                 resp.raise_for_status()
                 raw_content = resp.text.strip()
-                # 尝试解码
                 decoded = safe_base64_decode(raw_content)
-                nodes_content = decoded if decoded else raw_content
-                st.success("✅ 订阅获取成功！")
-        except Exception as e:
-            st.error(f"❌ 获取订阅失败: {e}")
-            st.stop()
+                text = decoded if decoded else raw_content
 
-    # --- 2. 处理文件上传 ---
-    elif nodes_file:
-        nodes_content = nodes_file.getvalue().decode("utf-8")
-        current_source = nodes_file.name
-    else:
-        st.warning("⚠️ 请先上传节点文件或输入订阅链接！")
+                if text.strip():
+                    sources.append(url)
+                    contents.append(text)
+        except Exception as e:
+            st.error(f"❌ 获取订阅失败：{url}\n原因：{e}")
+
+    # --- 2. 处理多个文件 ---
+    if nodes_files:
+        for f in nodes_files:
+            try:
+                text = f.getvalue().decode("utf-8", errors="ignore")
+                if text.strip():
+                    sources.append(f.name)
+                    contents.append(text)
+            except Exception as e:
+                st.error(f"❌ 读取文件失败：{f.name}\n原因：{e}")
+
+    if not contents:
+        st.warning("⚠️ 请至少上传一个节点文件或输入至少一个订阅链接！")
         st.stop()
+
+    # 合并所有来源内容
+    nodes_content = "\n".join(contents)
+
+    # 更稳：把 | 统一当换行（避免有些订阅用 | 分割）
+    nodes_content = nodes_content.replace("|", "\n")
+
+    current_source = " | ".join(sources)
 
     # --- 3. 读取规则文件 ---
     rules_content = ""
     if rules_file:
-        rules_content = rules_file.getvalue().decode("utf-8")
+        rules_content = rules_file.getvalue().decode("utf-8", errors="ignore")
     elif os.path.exists('rules.txt'):
         try:
             with open('rules.txt', 'r', encoding='utf-8') as f:
                 rules_content = f.read()
-        except:
+        except Exception:
             rules_content = ""
 
     # --- 4. 解析节点 ---
     proxies = []
     name_counter = {}
 
-    # 智能分行：处理有些订阅用 | 分割的情况
-    if "|" in nodes_content and "\n" not in nodes_content:
-        lines = nodes_content.split("|")
-    else:
-        lines = nodes_content.splitlines()
+    lines = nodes_content.splitlines()
 
     for line in lines:
         line = line.strip()
-        if not line: continue
+        if not line:
+            continue
         p = None
         try:
             if line.startswith("vmess://"):
@@ -325,7 +359,8 @@ if st.button("开始转换", type="primary", use_container_width=True):
 
         # 静态文件处理
         static_dir = "static"
-        if not os.path.exists(static_dir): os.makedirs(static_dir)
+        if not os.path.exists(static_dir):
+            os.makedirs(static_dir)
 
         # 使用 UUID 防止文件名冲突
         random_filename = f"config_{uuid.uuid4().hex[:8]}.yaml"
