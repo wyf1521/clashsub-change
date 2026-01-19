@@ -11,6 +11,19 @@
   # 小米api地址
   - DOMAIN-SUFFIX,xiaomimimo.com,DIRECT
 
+  # 以下用于b站视频解析走直连
+  # b23 短链接
+  - DOMAIN,b23.tv,DIRECT
+  - DOMAIN-SUFFIX,b23.tv,DIRECT
+
+  # bilibili 主站
+  - DOMAIN-SUFFIX,bilibili.com,DIRECT
+  - DOMAIN-KEYWORD,bilibili,DIRECT
+
+  # B站视频/CDN（防止视频走代理）
+  - DOMAIN-SUFFIX,bilivideo.com,DIRECT
+  - DOMAIN-SUFFIX,acgvideo.com,DIRECT
+
   - DOMAIN-SUFFIX,acl4.ssr,🎯 全球直连
   - DOMAIN-SUFFIX,ip6-localhost,🎯 全球直连
   - DOMAIN-SUFFIX,ip6-loopback,🎯 全球直连
