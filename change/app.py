@@ -394,7 +394,7 @@ manual_rules_text = st.text_area(
 )
 
 # 注意：请确保服务器已配置静态文件服务
-server_host = "http://ip.padaro.top:8501"
+server_host = "https://change.padaro.top"
 
 if st.button("开始转换", type="primary", use_container_width=True):
     sources = []
