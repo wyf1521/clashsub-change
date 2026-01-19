@@ -7,24 +7,27 @@ import requests
 import uuid
 
 
-def safe_base64_decode(s):
-    """安全的 Base64 解码，处理填充和替换"""
+ALLOWED_PREFIXES = ("vmess://", "vless://", "hysteria2://", "tuic://")
+
+
+def safe_base64_decode(s: str) -> str:
+    """安全的 Base64 解码，处理填充和替换；失败则返回原字符串"""
     if not s:
         return ""
-    s = s.strip().replace('-', '+').replace('_', '/')
+    s = s.strip().replace("-", "+").replace("_", "/")
     missing_padding = len(s) % 4
     if missing_padding:
-        s += '=' * (4 - missing_padding)
+        s += "=" * (4 - missing_padding)
     try:
-        return base64.urlsafe_b64decode(s).decode('utf-8')
+        return base64.urlsafe_b64decode(s).decode("utf-8")
     except Exception:
         try:
-            return base64.b64decode(s).decode('utf-8')
+            return base64.b64decode(s).decode("utf-8")
         except Exception:
-            return s  # 如果解码失败返回原字符串，防止报错
+            return s
 
 
-def safe_name_decode(name):
+def safe_name_decode(name: str) -> str:
     if not name:
         return "Unknown_Node"
     try:
@@ -35,7 +38,31 @@ def safe_name_decode(name):
         return name
 
 
-def parse_vmess(url_body):
+def normalize_nodes_text(text: str) -> str:
+    """把订阅里常见的 | 分隔也统一成换行，方便后续逐行处理"""
+    if not text:
+        return ""
+    return text.replace("|", "\n")
+
+
+def validate_nodes_lines(text: str):
+    """
+    校验：每个非空行必须以四种协议开头
+    返回：invalids: list[tuple(line_no, line_text)]
+    """
+    invalids = []
+    if not text:
+        return invalids
+    for idx, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        if not line.startswith(ALLOWED_PREFIXES):
+            invalids.append((idx, line))
+    return invalids
+
+
+def parse_vmess(url_body: str):
     try:
         json_str = safe_base64_decode(url_body)
         data = json.loads(json_str)
@@ -54,12 +81,12 @@ def parse_vmess(url_body):
             "network": data.get("net", "ws"),
             "tls": True if data.get("tls") == "tls" or data.get("tls") is True else False,
             "udp": True,
-            "skip-cert-verify": True if data.get("verify_cert") is False else False
+            "skip-cert-verify": True if data.get("verify_cert") is False else False,
         }
         if proxy["network"] == "ws":
             proxy["ws-opts"] = {
                 "path": data.get("path", "/"),
-                "headers": {"Host": data.get("host", data.get("add"))}
+                "headers": {"Host": data.get("host", data.get("add"))},
             }
         return proxy
     except Exception:
@@ -91,7 +118,7 @@ def parse_vless(parsed_url):
             host = proxy["servername"] or proxy["server"]
         proxy["ws-opts"] = {
             "path": params.get("path", ["/"])[0],
-            "headers": {"Host": host}
+            "headers": {"Host": host},
         }
     if network == "tcp":
         flow = params.get("flow", [""])[0]
@@ -122,13 +149,13 @@ def parse_hysteria2(parsed_url):
         "password": parsed_url.username,
         "sni": params.get("sni", [""])[0],
         "skip-cert-verify": True if params.get("insecure", ["0"])[0] == "1" else False,
-        "udp": True
+        "udp": True,
     }
 
 
 def parse_tuic(parsed_url):
     params = urllib.parse.parse_qs(parsed_url.query)
-    user_info = parsed_url.username.split(':') if parsed_url.username else ["", ""]
+    user_info = parsed_url.username.split(":") if parsed_url.username else ["", ""]
     name = safe_name_decode(parsed_url.fragment) if parsed_url.fragment else "tuic_node"
     proxy = {
         "name": name,
@@ -142,7 +169,7 @@ def parse_tuic(parsed_url):
         "congestion-controller": params.get("congestion_control", ["bbr"])[0],
         "skip-cert-verify": True if params.get("insecure", ["0"])[0] == "1" else False,
         "disable-sni": True,
-        "udp": True
+        "udp": True,
     }
     if "alpn" in params:
         proxy["alpn"] = [params["alpn"][0]]
@@ -152,8 +179,8 @@ def parse_tuic(parsed_url):
 def generate_yaml(proxies, rules_content, source_url=""):
     proxy_names = []
     for p in proxies:
-        safe_n = p['name'].replace('"', '').replace("'", "").strip()
-        p['name'] = safe_n
+        safe_n = p["name"].replace('"', "").replace("'", "").strip()
+        p["name"] = safe_n
         proxy_names.append(safe_n)
 
     header_info = f"# Source Subscription: {source_url}\n" if source_url else ""
@@ -165,37 +192,60 @@ external-controller: :9090
 proxies:
 """
     for p in proxies:
-        yaml_content += f"  - name: \"{p['name']}\"\n"
+        yaml_content += f'  - name: "{p["name"]}"\n'
         yaml_content += f"    type: {p['type']}\n"
         yaml_content += f"    server: {p['server']}\n"
         yaml_content += f"    port: {p['port']}\n"
-        for key in ["uuid", "password", "udp", "tls", "flow", "servername", "sni", "client-fingerprint", "network",
-                    "alterId", "cipher", "skip-cert-verify", "udp-relay-mode", "congestion-controller", "disable-sni"]:
+        for key in [
+            "uuid",
+            "password",
+            "udp",
+            "tls",
+            "flow",
+            "servername",
+            "sni",
+            "client-fingerprint",
+            "network",
+            "alterId",
+            "cipher",
+            "skip-cert-verify",
+            "udp-relay-mode",
+            "congestion-controller",
+            "disable-sni",
+        ]:
             if key in p:
                 val = str(p[key]).lower() if isinstance(p[key], bool) else p[key]
                 yaml_content += f"    {key}: {val}\n"
+
         if "ws-opts" in p:
             yaml_content += (
-                f"    ws-opts:\n"
-                f"      path: \"{p['ws-opts']['path']}\"\n"
-                f"      headers:\n"
-                f"        Host: {p['ws-opts']['headers']['Host']}\n"
+                "    ws-opts:\n"
+                f'      path: "{p["ws-opts"]["path"]}"\n'
+                "      headers:\n"
+                f'        Host: {p["ws-opts"]["headers"]["Host"]}\n'
             )
         if "reality-opts" in p:
-            yaml_content += f"    reality-opts:\n      public-key: {p['reality-opts']['public-key']}\n"
-            if "short-id" in p['reality-opts']:
-                yaml_content += f"      short-id: {p['reality-opts']['short-id']}\n"
+            yaml_content += "    reality-opts:\n"
+            yaml_content += f'      public-key: {p["reality-opts"]["public-key"]}\n'
+            if "short-id" in p["reality-opts"]:
+                yaml_content += f'      short-id: {p["reality-opts"]["short-id"]}\n'
         if "alpn" in p:
-            yaml_content += f"    alpn:\n"
-            for a in p['alpn']:
+            yaml_content += "    alpn:\n"
+            for a in p["alpn"]:
                 yaml_content += f"      - {a}\n"
 
     yaml_content += "proxy-groups:\n"
 
     groups = [
         {"name": "🚀 节点选择", "type": "select", "special": ["♻️ 自动选择", "DIRECT"]},
-        {"name": "♻️ 自动选择", "type": "url-test", "url": "http://www.gstatic.com/generate_204", "interval": 300,
-         "tolerance": 50, "special": []},
+        {
+            "name": "♻️ 自动选择",
+            "type": "url-test",
+            "url": "http://www.gstatic.com/generate_204",
+            "interval": 300,
+            "tolerance": 50,
+            "special": [],
+        },
         {"name": "🌍 国外媒体", "type": "select", "special": ["🚀 节点选择", "♻️ 自动选择", "🎯 全球直连"]},
         {"name": "📲 电报信息", "type": "select", "special": ["🚀 节点选择", "🎯 全球直连"]},
         {"name": "Ⓜ️ 微软服务", "type": "select", "special": ["🎯 全球直连", "🚀 节点选择"]},
@@ -208,19 +258,23 @@ proxies:
     ]
 
     for g in groups:
-        yaml_content += f"  - name: \"{g['name']}\"\n    type: {g['type']}\n"
+        yaml_content += f'  - name: "{g["name"]}"\n'
+        yaml_content += f"    type: {g['type']}\n"
         if "url" in g:
-            yaml_content += f"    url: {g['url']}\n    interval: {g['interval']}\n    tolerance: {g['tolerance']}\n"
-        yaml_content += f"    proxies:\n"
+            yaml_content += f"    url: {g['url']}\n"
+            yaml_content += f"    interval: {g['interval']}\n"
+            yaml_content += f"    tolerance: {g['tolerance']}\n"
+
+        yaml_content += "    proxies:\n"
         if "base" in g:
             for b in g["base"]:
-                yaml_content += f"      - \"{b}\"\n"
+                yaml_content += f'      - "{b}"\n'
         if "special" in g:
             for s in g["special"]:
-                yaml_content += f"      - \"{s}\"\n"
+                yaml_content += f'      - "{s}"\n'
         if not g.get("no_proxies", False):
             for name in proxy_names:
-                yaml_content += f"      - \"{name}\"\n"
+                yaml_content += f'      - "{name}"\n'
 
     yaml_content += "rules:\n" + rules_content
     return yaml_content
@@ -230,7 +284,7 @@ proxies:
 
 st.set_page_config(page_title="V2Ray 转 Clash", page_icon="🔄", layout="centered")
 
-# ===== GitHub 项目入口（侧边栏，最稳）=====
+# ===== GitHub 项目入口（侧边栏）=====
 st.sidebar.markdown("## 项目地址")
 st.sidebar.markdown(
     """
@@ -240,7 +294,7 @@ st.sidebar.markdown(
       <span>wyf1521 / clashsub-change</span>
     </a>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 st.sidebar.link_button("打开 GitHub", "https://github.com/wyf1521/clashsub-change")
 
@@ -249,15 +303,27 @@ st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    nodes_files = st.file_uploader("1. 上传节点文件 (txt，可多选)", type=['txt'], accept_multiple_files=True)
+    nodes_files = st.file_uploader("1. 上传节点文件 (txt，可多选)", type=["txt"], accept_multiple_files=True)
 with col2:
-    rules_file = st.file_uploader("2. 上传规则文件 (可选)", type=['txt'])
+    rules_file = st.file_uploader("2. 上传规则文件 (可选)", type=["txt"])
 
 subscription_urls_text = st.text_area(
-    "🔗 或者输入订阅链接（可多行，每行一个）",
-    placeholder="https://example.com/sub/...\nhttps://example2.com/sub/..."
+    "🔗 输入订阅链接（可多行，每行一个）",
+    placeholder="https://example.com/sub/...\nhttps://example2.com/sub/...",
+    height=120,
 )
 subscription_urls = [u.strip() for u in subscription_urls_text.splitlines() if u.strip()]
+
+manual_nodes_text = st.text_area(
+    "🧾 或者手动粘贴节点内容（每行一个链接，仅支持 vmess/vless/hysteria2/tuic）",
+    placeholder=(
+        "hysteria2://...\n\n"
+        "tuic://...\n\n"
+        "vmess://...\n\n"
+        "vless://..."
+    ),
+    height=180,
+)
 
 # 注意：请确保服务器已配置静态文件服务
 server_host = "http://ip.padaro.top:8501"
@@ -266,18 +332,30 @@ if st.button("开始转换", type="primary", use_container_width=True):
     sources = []
     contents = []
 
-    # --- 1. 处理多个订阅链接 ---
+    # --- A. 处理多个订阅链接 ---
     for url in subscription_urls:
         try:
             with st.spinner(f"🚀 正在请求订阅：{url}"):
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    )
                 }
                 resp = requests.get(url, headers=headers, timeout=15)
                 resp.raise_for_status()
                 raw_content = resp.text.strip()
+
                 decoded = safe_base64_decode(raw_content)
-                text = decoded if decoded else raw_content
+
+                # 更稳：优先选择“看起来像节点列表”的那份
+                decoded_n = normalize_nodes_text(decoded)
+                raw_n = normalize_nodes_text(raw_content)
+                if any(p in decoded_n for p in ALLOWED_PREFIXES):
+                    text = decoded_n
+                else:
+                    text = raw_n
 
                 if text.strip():
                     sources.append(url)
@@ -285,36 +363,50 @@ if st.button("开始转换", type="primary", use_container_width=True):
         except Exception as e:
             st.error(f"❌ 获取订阅失败：{url}\n原因：{e}")
 
-    # --- 2. 处理多个文件 ---
+    # --- B. 处理多个文件 ---
     if nodes_files:
         for f in nodes_files:
             try:
                 text = f.getvalue().decode("utf-8", errors="ignore")
+                text = normalize_nodes_text(text)
                 if text.strip():
                     sources.append(f.name)
                     contents.append(text)
             except Exception as e:
                 st.error(f"❌ 读取文件失败：{f.name}\n原因：{e}")
 
+    # --- C. 处理手动粘贴内容 ---
+    if manual_nodes_text and manual_nodes_text.strip():
+        text = normalize_nodes_text(manual_nodes_text)
+        sources.append("manual_input")
+        contents.append(text)
+
     if not contents:
-        st.warning("⚠️ 请至少上传一个节点文件或输入至少一个订阅链接！")
+        st.warning("⚠️ 请至少上传一个节点文件、输入至少一个订阅链接，或粘贴节点内容！")
         st.stop()
 
-    # 合并所有来源内容
-    nodes_content = "\n".join(contents)
-
-    # 更稳：把 | 统一当换行（避免有些订阅用 | 分割）
-    nodes_content = nodes_content.replace("|", "\n")
-
+    # 合并所有来源
+    nodes_content = "\n".join(contents).strip()
     current_source = " | ".join(sources)
+
+    # --- D. 严格校验：每行必须是四种协议之一 ---
+    invalids = validate_nodes_lines(nodes_content)
+    if invalids:
+        st.error("❌ 校验失败：发现不支持的行（每行必须以 vmess/vless/hysteria2/tuic 开头）")
+        show_n = 20
+        preview = "\n".join([f"第 {ln} 行：{txt[:200]}" for ln, txt in invalids[:show_n]])
+        st.code(preview, language="text")
+        if len(invalids) > show_n:
+            st.info(f"仅展示前 {show_n} 条，共 {len(invalids)} 条不合法行。请删除/修正后再转换。")
+        st.stop()
 
     # --- 3. 读取规则文件 ---
     rules_content = ""
     if rules_file:
         rules_content = rules_file.getvalue().decode("utf-8", errors="ignore")
-    elif os.path.exists('rules.txt'):
+    elif os.path.exists("rules.txt"):
         try:
-            with open('rules.txt', 'r', encoding='utf-8') as f:
+            with open("rules.txt", "r", encoding="utf-8") as f:
                 rules_content = f.read()
         except Exception:
             rules_content = ""
@@ -329,6 +421,7 @@ if st.button("开始转换", type="primary", use_container_width=True):
         line = line.strip()
         if not line:
             continue
+
         p = None
         try:
             if line.startswith("vmess://"):
@@ -342,10 +435,10 @@ if st.button("开始转换", type="primary", use_container_width=True):
 
             if p:
                 # 节点重名处理
-                o_name = p['name']
+                o_name = p["name"]
                 if o_name in name_counter:
                     name_counter[o_name] += 1
-                    p['name'] = f"{o_name}_{name_counter[o_name]}"
+                    p["name"] = f"{o_name}_{name_counter[o_name]}"
                 else:
                     name_counter[o_name] = 0
                 proxies.append(p)
@@ -383,5 +476,5 @@ if st.button("开始转换", type="primary", use_container_width=True):
             label="📥 下载 YAML 配置文件",
             data=final_yaml,
             file_name="clash_config.yaml",
-            mime="text/yaml"
+            mime="text/yaml",
         )
