@@ -88,6 +88,26 @@ def filter_valid_nodes_lines(text: str):
     return valid_lines, invalids, stats
 
 
+def dedupe_lines_keep_first(lines):
+    """
+    去重：按整行去重（strip 后）
+    - 返回：deduped_lines, dup_count
+    """
+    seen = set()
+    deduped = []
+    dup_count = 0
+    for line in lines:
+        key = line.strip()
+        if not key:
+            continue
+        if key in seen:
+            dup_count += 1
+            continue
+        seen.add(key)
+        deduped.append(line)
+    return deduped, dup_count
+
+
 def parse_vmess(url_body: str):
     try:
         json_str = safe_base64_decode(url_body)
@@ -357,7 +377,7 @@ if st.button("开始转换", type="primary", use_container_width=True):
     # 顺序要求：手动输入（最前） -> 上传文件（其次） -> 订阅网址（最后）
     # =========================================================
 
-    # --- 1) 手动粘贴（最高优先级：放最前）---
+    # --- 1) 手动粘贴（最高优先级）---
     if manual_nodes_text and manual_nodes_text.strip():
         text = normalize_nodes_text(manual_nodes_text)
         sources.append("manual_input")
@@ -411,15 +431,19 @@ if st.button("开始转换", type="primary", use_container_width=True):
         st.warning("⚠️ 请至少粘贴节点内容、上传节点文件，或输入订阅链接！")
         st.stop()
 
-    # 合并所有来源（合并后的顺序就等于上面 append 的顺序）
+    # 合并（按上面 append 的顺序）
     nodes_content_raw = "\n".join(contents).strip()
     current_source = " | ".join(sources)
 
-    # --- 跳过非法行 + 统计 + 提示 ---
+    # --- 过滤非法行（跳过 + 统计 + 提示）---
     valid_lines, invalids, stats = filter_valid_nodes_lines(nodes_content_raw)
 
+    # --- 去重：保留第一次出现（因此优先级自然成立）---
+    deduped_lines, dup_count = dedupe_lines_keep_first(valid_lines)
+
+    # UI 统计
     st.info(
-        f"📊 输入统计：非空行 {stats['total_nonempty']}，有效 {stats['valid']}，跳过 {stats['invalid']}。\n"
+        f"📊 输入统计：非空行 {stats['total_nonempty']}，有效 {stats['valid']}，跳过 {stats['invalid']}，去重丢弃 {dup_count}。\n"
         f"协议分布：vmess {stats['proto_count']['vmess']} / "
         f"vless {stats['proto_count']['vless']} / "
         f"hysteria2 {stats['proto_count']['hysteria2']} / "
@@ -434,11 +458,14 @@ if st.button("开始转换", type="primary", use_container_width=True):
         if len(invalids) > show_n:
             st.caption(f"仅展示前 {show_n} 条，共 {len(invalids)} 条被跳过。")
 
-    if not valid_lines:
+    if dup_count > 0:
+        st.warning(f"♻️ 已去重：发现并丢弃 {dup_count} 条重复节点行（保留优先级更高的首次出现）。")
+
+    if not deduped_lines:
         st.error("❌ 没有任何有效节点行（全部被跳过或为空），请检查输入。")
         st.stop()
 
-    nodes_content = "\n".join(valid_lines)
+    nodes_content = "\n".join(deduped_lines)
 
     # --- 读取规则文件 ---
     rules_content = ""
@@ -451,7 +478,7 @@ if st.button("开始转换", type="primary", use_container_width=True):
         except Exception:
             rules_content = ""
 
-    # --- 解析节点（解析顺序 = nodes_content 顺序）---
+    # --- 解析节点（顺序 = nodes_content 顺序）---
     proxies = []
     name_counter = {}
 
