@@ -6,12 +6,18 @@ import os
 import requests
 import uuid
 
-
+# ... [Previous imports and ALLOWED_PREFIXES remain unchanged] ...
 ALLOWED_PREFIXES = ("vmess://", "vless://", "hysteria2://", "tuic://")
+
+# --- NEW: Mandatory rules to be placed at the top ---
+MANDATORY_RULES = """
+- IP-CIDR,45.192.106.85/32,DIRECT
+- DOMAIN-SUFFIX,padaro.top,DIRECT
+"""
 
 
 def safe_base64_decode(s: str) -> str:
-    """安全的 Base64 解码，处理填充和替换；失败则返回原字符串"""
+    # ... [Function remains unchanged] ...
     if not s:
         return ""
     s = s.strip().replace("-", "+").replace("_", "/")
@@ -27,6 +33,8 @@ def safe_base64_decode(s: str) -> str:
             return s
 
 
+# ... [safe_name_decode, normalize_nodes_text, filter_valid_nodes_lines, dedupe_lines_keep_first remain unchanged] ...
+
 def safe_name_decode(name: str) -> str:
     if not name:
         return "Unknown_Node"
@@ -39,22 +47,14 @@ def safe_name_decode(name: str) -> str:
 
 
 def normalize_nodes_text(text: str) -> str:
-    """把订阅里常见的 | 分隔也统一成换行"""
     if not text:
         return ""
     return text.replace("|", "\n")
 
 
 def filter_valid_nodes_lines(text: str):
-    """
-    过滤 + 统计：
-    - valid_lines：合法行（非空且以允许协议开头）
-    - invalids：非法行 (行号, 内容)
-    - stats：统计信息
-    """
     valid_lines = []
     invalids = []
-
     total_nonempty = 0
     proto_count = {"vmess": 0, "vless": 0, "hysteria2": 0, "tuic": 0}
 
@@ -89,9 +89,6 @@ def filter_valid_nodes_lines(text: str):
 
 
 def dedupe_lines_keep_first(lines):
-    """
-    去重：按整行去重（strip 后）；保留首次出现（优先级自然成立）
-    """
     seen = set()
     deduped = []
     dup_count = 0
@@ -107,21 +104,40 @@ def dedupe_lines_keep_first(lines):
     return deduped, dup_count
 
 
-def ensure_trailing_newline(s: str) -> str:
-    """保证规则末尾有换行，方便拼接"""
-    if not s:
+# --- NEW: Function to enforce strictly 2 spaces indentation ---
+def normalize_rules_text(text: str) -> str:
+    """
+    Normalizes rule lines:
+    1. Splits into lines.
+    2. Strips ALL existing whitespace (handling 0, 1, 3+ spaces).
+    3. Adds exactly 2 spaces indentation.
+    4. Ensures trailing newline.
+    """
+    if not text:
         return ""
-    return s if s.endswith("\n") else (s + "\n")
 
+    normalized_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Enforce "  " prefix
+        normalized_lines.append(f"  {stripped}")
+
+    if not normalized_lines:
+        return ""
+
+    return "\n".join(normalized_lines) + "\n"
+
+
+# ... [parse_vmess, parse_vless, parse_hysteria2, parse_tuic, generate_yaml remain unchanged] ...
 
 def parse_vmess(url_body: str):
     try:
         json_str = safe_base64_decode(url_body)
         data = json.loads(json_str)
-
         raw_name = data.get("ps", "vmess")
         name = safe_name_decode(raw_name)
-
         proxy = {
             "name": name,
             "type": "vmess",
@@ -148,10 +164,8 @@ def parse_vmess(url_body: str):
 def parse_vless(parsed_url):
     params = urllib.parse.parse_qs(parsed_url.query)
     network = params.get("type", ["tcp"])[0]
-
     raw_name = parsed_url.fragment
     name = safe_name_decode(raw_name) if raw_name else "vless_node"
-
     proxy = {
         "name": name,
         "type": "vless",
@@ -336,7 +350,7 @@ proxies:
 
 st.set_page_config(page_title="V2Ray 转 Clash", page_icon="🔄", layout="centered")
 
-# ===== GitHub 项目入口（侧边栏）=====
+# ... [Sidebar logic remains unchanged] ...
 st.sidebar.markdown("## 项目地址")
 st.sidebar.markdown(
     """
@@ -357,7 +371,6 @@ col1, col2 = st.columns(2)
 with col1:
     nodes_files = st.file_uploader("1. 上传节点文件 (txt，可多选)", type=["txt"], accept_multiple_files=True)
 with col2:
-    # 这个上传的规则文件，作为“默认规则”的来源之一（优先级最高）
     rules_file = st.file_uploader("2. 上传默认规则文件 (可选，txt)", type=["txt"])
 
 manual_nodes_text = st.text_area(
@@ -393,24 +406,18 @@ manual_rules_text = st.text_area(
     height=180,
 )
 
-# 注意：请确保服务器已配置静态文件服务
 server_host = "https://change.padaro.top"
 
 if st.button("开始转换", type="primary", use_container_width=True):
     sources = []
     contents = []
 
-    # =========================================================
-    # 节点输入顺序：手动输入（最前） -> 上传文件（其次） -> 订阅网址（最后）
-    # =========================================================
-
-    # --- 1) 手动粘贴（最高优先级）---
+    # ... [Node processing logic: manual -> file -> url remains unchanged] ...
     if manual_nodes_text and manual_nodes_text.strip():
         text = normalize_nodes_text(manual_nodes_text)
         sources.append("manual_input")
         contents.append(text)
 
-    # --- 2) 上传文件（其次）---
     if nodes_files:
         for f in nodes_files:
             try:
@@ -422,7 +429,6 @@ if st.button("开始转换", type="primary", use_container_width=True):
             except Exception as e:
                 st.error(f"❌ 读取文件失败：{f.name}\n原因：{e}")
 
-    # --- 3) 订阅链接（最后）---
     for url in subscription_urls:
         try:
             with st.spinner(f"🚀 正在请求订阅：{url}"):
@@ -441,7 +447,6 @@ if st.button("开始转换", type="primary", use_container_width=True):
                 decoded_n = normalize_nodes_text(decoded)
                 raw_n = normalize_nodes_text(raw_content)
 
-                # 选择“更像节点列表”的那个
                 if any(p in decoded_n for p in ALLOWED_PREFIXES):
                     text = decoded_n
                 else:
@@ -457,17 +462,12 @@ if st.button("开始转换", type="primary", use_container_width=True):
         st.warning("⚠️ 请至少粘贴节点内容、上传节点文件，或输入订阅链接！")
         st.stop()
 
-    # 合并（按上面 append 的顺序）
     nodes_content_raw = "\n".join(contents).strip()
     current_source = " | ".join(sources)
 
-    # --- 过滤非法行（跳过 + 统计 + 提示）---
     valid_lines, invalids, stats = filter_valid_nodes_lines(nodes_content_raw)
-
-    # --- 去重：保留第一次出现（因此优先级自然成立）---
     deduped_lines, dup_count = dedupe_lines_keep_first(valid_lines)
 
-    # UI 统计
     st.info(
         f"📊 节点统计：非空行 {stats['total_nonempty']}，有效 {stats['valid']}，跳过 {stats['invalid']}，去重丢弃 {dup_count}。\n"
         f"协议分布：vmess {stats['proto_count']['vmess']} / "
@@ -494,10 +494,12 @@ if st.button("开始转换", type="primary", use_container_width=True):
     nodes_content = "\n".join(deduped_lines)
 
     # =========================================================
-    # 规则处理：默认规则 + 手动规则（追加/覆盖）
+    # 规则处理 (UPDATED)
+    # 逻辑：Mandatory Rules (Top) + [Default Rules + Manual Rules]
+    # 所有规则合并后统一清洗：去除原有缩进，统一强制加 2 个空格
     # =========================================================
 
-    # 1) 读取默认规则（优先：上传的规则文件；其次：本地 rules.txt；否则为空）
+    # 1) 读取默认规则
     default_rules = ""
     if rules_file:
         default_rules = rules_file.getvalue().decode("utf-8", errors="ignore")
@@ -508,31 +510,25 @@ if st.button("开始转换", type="primary", use_container_width=True):
         except Exception:
             default_rules = ""
 
-    default_rules = ensure_trailing_newline(default_rules)
-
     # 2) 读取手动规则
-    manual_rules = ensure_trailing_newline(manual_rules_text.strip()) if manual_rules_text.strip() else ""
+    manual_rules = manual_rules_text.strip() if manual_rules_text.strip() else ""
 
-    # 3) 选择追加 or 覆盖
+    # 3) 合并规则 (Top Priority -> Manual Override check -> Default)
+    # 注意：MANDATORY_RULES 永远在最前
+    raw_rules_content = ""
+
     if rules_mode == "仅使用手动规则（覆盖默认）":
-        rules_content = manual_rules
+        raw_rules_content = MANDATORY_RULES + "\n" + manual_rules
     else:
-        # 追加到默认
-        rules_content = default_rules + manual_rules
+        raw_rules_content = MANDATORY_RULES + "\n" + default_rules + "\n" + manual_rules
 
-    # 给用户一个规则统计提示
-    dr_lines = len([x for x in default_rules.splitlines() if x.strip()]) if default_rules else 0
-    mr_lines = len([x for x in manual_rules.splitlines() if x.strip()]) if manual_rules else 0
-    final_lines = len([x for x in rules_content.splitlines() if x.strip()]) if rules_content else 0
+    # 4) 统一格式化：清洗缩进并强制 2 空格
+    rules_content = normalize_rules_text(raw_rules_content)
 
-    st.caption(
-        f"规则统计：默认规则 {dr_lines} 行；手动规则 {mr_lines} 行；最终使用 {final_lines} 行。"
-    )
+    final_lines = len([x for x in rules_content.splitlines() if x.strip()])
+    st.caption(f"规则统计：最终包含 {final_lines} 行规则 (含强制置顶规则)。")
 
-    if not rules_content.strip():
-        st.warning("⚠️ 当前没有任何规则（rules 部分为空）。如需规则，请上传默认规则/填写手动规则。")
-
-    # --- 解析节点（顺序 = nodes_content 顺序）---
+    # --- 解析节点 ---
     proxies = []
     name_counter = {}
 
