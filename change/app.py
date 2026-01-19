@@ -45,21 +45,47 @@ def normalize_nodes_text(text: str) -> str:
     return text.replace("|", "\n")
 
 
-def validate_nodes_lines(text: str):
+def filter_valid_nodes_lines(text: str):
     """
-    校验：每个非空行必须以四种协议开头
-    返回：invalids: list[tuple(line_no, line_text)]
+    过滤 + 统计：
+    - valid_lines：合法行（非空且以允许协议开头）
+    - invalids：非法行 (行号, 内容)
+    - stats：统计信息
     """
+    valid_lines = []
     invalids = []
-    if not text:
-        return invalids
+
+    total_nonempty = 0
+    proto_count = {"vmess": 0, "vless": 0, "hysteria2": 0, "tuic": 0}
+
     for idx, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line:
             continue
-        if not line.startswith(ALLOWED_PREFIXES):
+        total_nonempty += 1
+
+        if line.startswith("vmess://"):
+            proto_count["vmess"] += 1
+            valid_lines.append(line)
+        elif line.startswith("vless://"):
+            proto_count["vless"] += 1
+            valid_lines.append(line)
+        elif line.startswith("hysteria2://"):
+            proto_count["hysteria2"] += 1
+            valid_lines.append(line)
+        elif line.startswith("tuic://"):
+            proto_count["tuic"] += 1
+            valid_lines.append(line)
+        else:
             invalids.append((idx, line))
-    return invalids
+
+    stats = {
+        "total_nonempty": total_nonempty,
+        "valid": len(valid_lines),
+        "invalid": len(invalids),
+        "proto_count": proto_count,
+    }
+    return valid_lines, invalids, stats
 
 
 def parse_vmess(url_body: str):
@@ -307,23 +333,18 @@ with col1:
 with col2:
     rules_file = st.file_uploader("2. 上传规则文件 (可选)", type=["txt"])
 
+manual_nodes_text = st.text_area(
+    "🧾 手动粘贴节点内容（优先级最高；每行一个链接，仅支持 vmess/vless/hysteria2/tuic）",
+    placeholder="hysteria2://...\ntuic://...\nvmess://...\nvless://...",
+    height=180,
+)
+
 subscription_urls_text = st.text_area(
-    "🔗 输入订阅链接（可多行，每行一个）",
+    "🔗 输入订阅链接（优先级最低；可多行，每行一个）",
     placeholder="https://example.com/sub/...\nhttps://example2.com/sub/...",
     height=120,
 )
 subscription_urls = [u.strip() for u in subscription_urls_text.splitlines() if u.strip()]
-
-manual_nodes_text = st.text_area(
-    "🧾 或者手动粘贴节点内容（每行一个链接，仅支持 vmess/vless/hysteria2/tuic）",
-    placeholder=(
-        "hysteria2://...\n\n"
-        "tuic://...\n\n"
-        "vmess://...\n\n"
-        "vless://..."
-    ),
-    height=180,
-)
 
 # 注意：请确保服务器已配置静态文件服务
 server_host = "http://ip.padaro.top:8501"
@@ -332,7 +353,29 @@ if st.button("开始转换", type="primary", use_container_width=True):
     sources = []
     contents = []
 
-    # --- A. 处理多个订阅链接 ---
+    # =========================================================
+    # 顺序要求：手动输入（最前） -> 上传文件（其次） -> 订阅网址（最后）
+    # =========================================================
+
+    # --- 1) 手动粘贴（最高优先级：放最前）---
+    if manual_nodes_text and manual_nodes_text.strip():
+        text = normalize_nodes_text(manual_nodes_text)
+        sources.append("manual_input")
+        contents.append(text)
+
+    # --- 2) 上传文件（其次）---
+    if nodes_files:
+        for f in nodes_files:
+            try:
+                text = f.getvalue().decode("utf-8", errors="ignore")
+                text = normalize_nodes_text(text)
+                if text.strip():
+                    sources.append(f.name)
+                    contents.append(text)
+            except Exception as e:
+                st.error(f"❌ 读取文件失败：{f.name}\n原因：{e}")
+
+    # --- 3) 订阅链接（最后）---
     for url in subscription_urls:
         try:
             with st.spinner(f"🚀 正在请求订阅：{url}"):
@@ -349,9 +392,10 @@ if st.button("开始转换", type="primary", use_container_width=True):
 
                 decoded = safe_base64_decode(raw_content)
 
-                # 更稳：优先选择“看起来像节点列表”的那份
                 decoded_n = normalize_nodes_text(decoded)
                 raw_n = normalize_nodes_text(raw_content)
+
+                # 选择“更像节点列表”的那个
                 if any(p in decoded_n for p in ALLOWED_PREFIXES):
                     text = decoded_n
                 else:
@@ -363,44 +407,40 @@ if st.button("开始转换", type="primary", use_container_width=True):
         except Exception as e:
             st.error(f"❌ 获取订阅失败：{url}\n原因：{e}")
 
-    # --- B. 处理多个文件 ---
-    if nodes_files:
-        for f in nodes_files:
-            try:
-                text = f.getvalue().decode("utf-8", errors="ignore")
-                text = normalize_nodes_text(text)
-                if text.strip():
-                    sources.append(f.name)
-                    contents.append(text)
-            except Exception as e:
-                st.error(f"❌ 读取文件失败：{f.name}\n原因：{e}")
-
-    # --- C. 处理手动粘贴内容 ---
-    if manual_nodes_text and manual_nodes_text.strip():
-        text = normalize_nodes_text(manual_nodes_text)
-        sources.append("manual_input")
-        contents.append(text)
-
     if not contents:
-        st.warning("⚠️ 请至少上传一个节点文件、输入至少一个订阅链接，或粘贴节点内容！")
+        st.warning("⚠️ 请至少粘贴节点内容、上传节点文件，或输入订阅链接！")
         st.stop()
 
-    # 合并所有来源
-    nodes_content = "\n".join(contents).strip()
+    # 合并所有来源（合并后的顺序就等于上面 append 的顺序）
+    nodes_content_raw = "\n".join(contents).strip()
     current_source = " | ".join(sources)
 
-    # --- D. 严格校验：每行必须是四种协议之一 ---
-    invalids = validate_nodes_lines(nodes_content)
+    # --- 跳过非法行 + 统计 + 提示 ---
+    valid_lines, invalids, stats = filter_valid_nodes_lines(nodes_content_raw)
+
+    st.info(
+        f"📊 输入统计：非空行 {stats['total_nonempty']}，有效 {stats['valid']}，跳过 {stats['invalid']}。\n"
+        f"协议分布：vmess {stats['proto_count']['vmess']} / "
+        f"vless {stats['proto_count']['vless']} / "
+        f"hysteria2 {stats['proto_count']['hysteria2']} / "
+        f"tuic {stats['proto_count']['tuic']}"
+    )
+
     if invalids:
-        st.error("❌ 校验失败：发现不支持的行（每行必须以 vmess/vless/hysteria2/tuic 开头）")
         show_n = 20
         preview = "\n".join([f"第 {ln} 行：{txt[:200]}" for ln, txt in invalids[:show_n]])
+        st.warning("⚠️ 已跳过不支持的行（只保留 vmess/vless/hysteria2/tuic 开头的行）")
         st.code(preview, language="text")
         if len(invalids) > show_n:
-            st.info(f"仅展示前 {show_n} 条，共 {len(invalids)} 条不合法行。请删除/修正后再转换。")
+            st.caption(f"仅展示前 {show_n} 条，共 {len(invalids)} 条被跳过。")
+
+    if not valid_lines:
+        st.error("❌ 没有任何有效节点行（全部被跳过或为空），请检查输入。")
         st.stop()
 
-    # --- 3. 读取规则文件 ---
+    nodes_content = "\n".join(valid_lines)
+
+    # --- 读取规则文件 ---
     rules_content = ""
     if rules_file:
         rules_content = rules_file.getvalue().decode("utf-8", errors="ignore")
@@ -411,13 +451,11 @@ if st.button("开始转换", type="primary", use_container_width=True):
         except Exception:
             rules_content = ""
 
-    # --- 4. 解析节点 ---
+    # --- 解析节点（解析顺序 = nodes_content 顺序）---
     proxies = []
     name_counter = {}
 
-    lines = nodes_content.splitlines()
-
-    for line in lines:
+    for line in nodes_content.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -434,7 +472,6 @@ if st.button("开始转换", type="primary", use_container_width=True):
                 p = parse_tuic(urllib.parse.urlparse(line))
 
             if p:
-                # 节点重名处理
                 o_name = p["name"]
                 if o_name in name_counter:
                     name_counter[o_name] += 1
@@ -450,12 +487,10 @@ if st.button("开始转换", type="primary", use_container_width=True):
     else:
         final_yaml = generate_yaml(proxies, rules_content, current_source)
 
-        # 静态文件处理
         static_dir = "static"
         if not os.path.exists(static_dir):
             os.makedirs(static_dir)
 
-        # 使用 UUID 防止文件名冲突
         random_filename = f"config_{uuid.uuid4().hex[:8]}.yaml"
         file_path = os.path.join(static_dir, random_filename)
 
