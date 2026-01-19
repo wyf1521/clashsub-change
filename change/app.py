@@ -213,18 +213,19 @@ proxies:
 
 st.set_page_config(page_title="V2Ray 转 Clash", page_icon="🔄", layout="centered")
 # ===== GitHub 项目入口（右上角）=====
-st.markdown(
+st.sidebar.markdown("## 项目地址")
+st.sidebar.markdown(
     """
-    <div style="position: fixed; top: 15px; right: 20px; z-index: 999;">
-        <a href="https://github.com/wyf1521/clashsub-change" target="_blank">
-            <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-                 width="32"
-                 alt="GitHub Repo">
-        </a>
-    </div>
+    <a href="https://github.com/wyf1521/clashsub-change" target="_blank"
+       style="display:flex;align-items:center;gap:8px;text-decoration:none;">
+      <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" width="20">
+      <span>wyf1521 / clashsub-change</span>
+    </a>
     """,
     unsafe_allow_html=True
 )
+st.sidebar.link_button("打开 GitHub", "https://github.com/wyf1521/clashsub-change")
+
 
 st.title("🔄 V2Ray 链接转 Clash Meta 配置")
 st.markdown("---")
