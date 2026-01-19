@@ -39,7 +39,7 @@ def safe_name_decode(name: str) -> str:
 
 
 def normalize_nodes_text(text: str) -> str:
-    """把订阅里常见的 | 分隔也统一成换行，方便后续逐行处理"""
+    """把订阅里常见的 | 分隔也统一成换行"""
     if not text:
         return ""
     return text.replace("|", "\n")
@@ -90,8 +90,7 @@ def filter_valid_nodes_lines(text: str):
 
 def dedupe_lines_keep_first(lines):
     """
-    去重：按整行去重（strip 后）
-    - 返回：deduped_lines, dup_count
+    去重：按整行去重（strip 后）；保留首次出现（优先级自然成立）
     """
     seen = set()
     deduped = []
@@ -106,6 +105,13 @@ def dedupe_lines_keep_first(lines):
         seen.add(key)
         deduped.append(line)
     return deduped, dup_count
+
+
+def ensure_trailing_newline(s: str) -> str:
+    """保证规则末尾有换行，方便拼接"""
+    if not s:
+        return ""
+    return s if s.endswith("\n") else (s + "\n")
 
 
 def parse_vmess(url_body: str):
@@ -351,7 +357,8 @@ col1, col2 = st.columns(2)
 with col1:
     nodes_files = st.file_uploader("1. 上传节点文件 (txt，可多选)", type=["txt"], accept_multiple_files=True)
 with col2:
-    rules_file = st.file_uploader("2. 上传规则文件 (可选)", type=["txt"])
+    # 这个上传的规则文件，作为“默认规则”的来源之一（优先级最高）
+    rules_file = st.file_uploader("2. 上传默认规则文件 (可选，txt)", type=["txt"])
 
 manual_nodes_text = st.text_area(
     "🧾 手动粘贴节点内容（优先级最高；每行一个链接，仅支持 vmess/vless/hysteria2/tuic）",
@@ -366,6 +373,26 @@ subscription_urls_text = st.text_area(
 )
 subscription_urls = [u.strip() for u in subscription_urls_text.splitlines() if u.strip()]
 
+st.markdown("---")
+st.subheader("📜 规则设置")
+
+rules_mode = st.radio(
+    "规则使用方式",
+    options=["追加到默认规则（推荐）", "仅使用手动规则（覆盖默认）"],
+    index=0,
+    horizontal=True,
+)
+
+manual_rules_text = st.text_area(
+    "📝 手动输入规则（可选）",
+    placeholder=(
+        "  # 示例：B站直连\n"
+        "  - DOMAIN,b23.tv,DIRECT\n"
+        "  - DOMAIN-SUFFIX,bilibili.com,DIRECT\n"
+    ),
+    height=180,
+)
+
 # 注意：请确保服务器已配置静态文件服务
 server_host = "http://ip.padaro.top:8501"
 
@@ -374,7 +401,7 @@ if st.button("开始转换", type="primary", use_container_width=True):
     contents = []
 
     # =========================================================
-    # 顺序要求：手动输入（最前） -> 上传文件（其次） -> 订阅网址（最后）
+    # 节点输入顺序：手动输入（最前） -> 上传文件（其次） -> 订阅网址（最后）
     # =========================================================
 
     # --- 1) 手动粘贴（最高优先级）---
@@ -411,7 +438,6 @@ if st.button("开始转换", type="primary", use_container_width=True):
                 raw_content = resp.text.strip()
 
                 decoded = safe_base64_decode(raw_content)
-
                 decoded_n = normalize_nodes_text(decoded)
                 raw_n = normalize_nodes_text(raw_content)
 
@@ -443,7 +469,7 @@ if st.button("开始转换", type="primary", use_container_width=True):
 
     # UI 统计
     st.info(
-        f"📊 输入统计：非空行 {stats['total_nonempty']}，有效 {stats['valid']}，跳过 {stats['invalid']}，去重丢弃 {dup_count}。\n"
+        f"📊 节点统计：非空行 {stats['total_nonempty']}，有效 {stats['valid']}，跳过 {stats['invalid']}，去重丢弃 {dup_count}。\n"
         f"协议分布：vmess {stats['proto_count']['vmess']} / "
         f"vless {stats['proto_count']['vless']} / "
         f"hysteria2 {stats['proto_count']['hysteria2']} / "
@@ -462,21 +488,49 @@ if st.button("开始转换", type="primary", use_container_width=True):
         st.warning(f"♻️ 已去重：发现并丢弃 {dup_count} 条重复节点行（保留优先级更高的首次出现）。")
 
     if not deduped_lines:
-        st.error("❌ 没有任何有效节点行（全部被跳过或为空），请检查输入。")
+        st.error("❌ 没有任何有效节点行（全部被跳过/去重或为空），请检查输入。")
         st.stop()
 
     nodes_content = "\n".join(deduped_lines)
 
-    # --- 读取规则文件 ---
-    rules_content = ""
+    # =========================================================
+    # 规则处理：默认规则 + 手动规则（追加/覆盖）
+    # =========================================================
+
+    # 1) 读取默认规则（优先：上传的规则文件；其次：本地 rules.txt；否则为空）
+    default_rules = ""
     if rules_file:
-        rules_content = rules_file.getvalue().decode("utf-8", errors="ignore")
+        default_rules = rules_file.getvalue().decode("utf-8", errors="ignore")
     elif os.path.exists("rules.txt"):
         try:
             with open("rules.txt", "r", encoding="utf-8") as f:
-                rules_content = f.read()
+                default_rules = f.read()
         except Exception:
-            rules_content = ""
+            default_rules = ""
+
+    default_rules = ensure_trailing_newline(default_rules)
+
+    # 2) 读取手动规则
+    manual_rules = ensure_trailing_newline(manual_rules_text.strip()) if manual_rules_text.strip() else ""
+
+    # 3) 选择追加 or 覆盖
+    if rules_mode == "仅使用手动规则（覆盖默认）":
+        rules_content = manual_rules
+    else:
+        # 追加到默认
+        rules_content = default_rules + manual_rules
+
+    # 给用户一个规则统计提示
+    dr_lines = len([x for x in default_rules.splitlines() if x.strip()]) if default_rules else 0
+    mr_lines = len([x for x in manual_rules.splitlines() if x.strip()]) if manual_rules else 0
+    final_lines = len([x for x in rules_content.splitlines() if x.strip()]) if rules_content else 0
+
+    st.caption(
+        f"规则统计：默认规则 {dr_lines} 行；手动规则 {mr_lines} 行；最终使用 {final_lines} 行。"
+    )
+
+    if not rules_content.strip():
+        st.warning("⚠️ 当前没有任何规则（rules 部分为空）。如需规则，请上传默认规则/填写手动规则。")
 
     # --- 解析节点（顺序 = nodes_content 顺序）---
     proxies = []
