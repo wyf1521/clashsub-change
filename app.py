@@ -406,7 +406,9 @@ manual_rules_text = st.text_area(
     height=180,
 )
 
-server_host = "https://change.padaro.top"
+server_host = os.getenv("CLASHSUB_SERVER_HOST", "https://change.padaro.top")
+static_dir = os.getenv("CLASHSUB_STATIC_DIR", "/opt/clashsub-change/static")
+static_url_prefix = os.getenv("CLASHSUB_STATIC_URL_PREFIX", "/static").rstrip("/")
 
 if st.button("开始转换", type="primary", use_container_width=True):
     sources = []
@@ -564,7 +566,6 @@ if st.button("开始转换", type="primary", use_container_width=True):
     else:
         final_yaml = generate_yaml(proxies, rules_content, current_source)
 
-        static_dir = "static"
         if not os.path.exists(static_dir):
             os.makedirs(static_dir)
 
@@ -574,7 +575,7 @@ if st.button("开始转换", type="primary", use_container_width=True):
         with open(file_path, "w", encoding="utf-8-sig") as f:
             f.write(final_yaml)
 
-        download_url = f"{server_host}/app/static/{random_filename}"
+        download_url = f"{server_host}{static_url_prefix}/{random_filename}"
 
         st.success(f"🎉 转换成功！共包含 {len(proxies)} 个节点")
         st.markdown("---")
