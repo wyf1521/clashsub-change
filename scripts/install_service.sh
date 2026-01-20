@@ -43,6 +43,9 @@ ExecStart=${PYTHON_BIN} -m streamlit run ${PROJECT_DIR}/app.py --server.address 
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
+Environment=CLASHSUB_STATIC_DIR=/opt/1panel/www/sites/change.padaro.top/index/static
+Environment=CLASHSUB_STATIC_URL_PREFIX=/static
+Environment=CLASHSUB_SERVER_HOST=https://change.padaro.top
 
 # 日志追加到项目目录
 StandardOutput=append:${LOG_FILE}
