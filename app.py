@@ -221,22 +221,35 @@ def parse_hysteria2(parsed_url):
 
 def parse_tuic(parsed_url):
     params = urllib.parse.parse_qs(parsed_url.query)
-    user_info = parsed_url.username.split(":") if parsed_url.username else ["", ""]
+    raw_user_info = parsed_url.username if parsed_url.username else ""
+    decoded_info = urllib.parse.unquote(raw_user_info)
+    if ":" in decoded_info:
+        user_parts = decoded_info.split(":", 1)
+        uuid_val = user_parts[0]
+        password_val = user_parts[1]
+    else:
+        uuid_val = decoded_info
+        password_val = urllib.parse.unquote(parsed_url.password) if parsed_url.password else ""
     name = safe_name_decode(parsed_url.fragment) if parsed_url.fragment else "tuic_node"
+    sni_val = params.get("sni", [""])[0]
+
     proxy = {
         "name": name,
         "type": "tuic",
         "server": parsed_url.hostname,
         "port": parsed_url.port,
-        "uuid": user_info[0],
-        "password": user_info[1] if len(user_info) > 1 else "",
-        "sni": params.get("sni", [""])[0],
+        "uuid": uuid_val,
+        "password": password_val,
+        "sni": sni_val,
         "udp-relay-mode": "native",
         "congestion-controller": params.get("congestion_control", ["bbr"])[0],
         "skip-cert-verify": True if params.get("insecure", ["0"])[0] == "1" else False,
-        "disable-sni": True,
         "udp": True,
     }
+    if sni_val:
+        proxy["disable-sni"] = False
+    else:
+        proxy["disable-sni"] = True
     if "alpn" in params:
         proxy["alpn"] = [params["alpn"][0]]
     return proxy
